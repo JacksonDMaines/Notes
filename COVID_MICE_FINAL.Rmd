@@ -1,0 +1,1216 @@
+---
+title: "COVID MICE"
+author: "Jackson Maines"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(Hmisc)
+library(ez)
+library(lme4)
+library(lmerTest)
+library(performance)
+library(ggrepel)
+setwd("C:/Users/TIGGE/OneDrive/Desktop/UTMB SIBDS")
+```
+
+# Packages Used for Project
+  Here are the packages used in our project.
+\newline
+```{r, packages}
+library(tidyverse)
+library(Hmisc)
+library(ez)
+library(lme4)
+library(lmerTest)
+library(performance)
+library(ggrepel)
+```
+Tidyverse has a variety of packages included inside of it. We will mostly be
+  using dplyr and ggplot2.
+  
+Hmisc has a variety of packages included inside of it. We will use this for 
+  ease of use in coding.
+
+ez is for our repeated measure anovas.
+
+lme4 and lmerTest are for our mixed models.
+
+performance is also to test our mixed models.
+
+ggrepel is for volcano plots to move point labels away from eachother
+
+\newpage
+
+# Data Cleaning
+
+  Some initial data cleaning. The data wasn't formatted nice. Probably a better 
+way to do all of this but idc. 
+\newline
+```{r, Data_Cleaning}
+  #Calls Data Set
+Mice_Weight <- read.csv("Endsley Data 1.1.csv")
+
+  #Removes first two columns
+Mice_Weight <- Mice_Weight[,-(1:2)]
+
+  #Replaces column names with first row
+names(Mice_Weight) <- Mice_Weight %>% 
+  slice(1) %>% 
+  unlist()
+Mice_Weight <- Mice_Weight %>% 
+  slice(-1)
+
+  #Removes extra rows at bottom
+Mice_Weight <- Mice_Weight[-(26:36),]
+
+  #Rename Animal # to something less annoying
+Mice_Weight <- Mice_Weight %>%
+  rename(Animal_Num =`Animal #`)
+
+  #Split Sex and Genotype into 2 columns
+Mice_Weight <- Mice_Weight %>% 
+  separate(col=`Sex/Genotype`, into=c("Sex", "GenoType"), sep="/")
+
+  #Factor Character columns
+Mice_Weight <- Mice_Weight %>% 
+  mutate(across(c(1, 2:4), as.factor))
+
+  #Change character columns to numeric 
+Mice_Weight <- Mice_Weight %>% 
+  mutate(across(5:12, as.numeric))
+
+  #Pivot Longer, puts data into long format
+    #Fix Date format
+Mice_Weight_Long <- Mice_Weight %>%
+  pivot_longer(!c("Animal_Num", "Sex", "GenoType", "Infection"), 
+               names_to = "Dates", 
+               values_to = "Weight") %>%
+  mutate(Dates = mdy(Dates))
+
+```
+\newpage
+
+# First Plots
+
+  These are some of our first exploratory plots of the data.
+
+## Sex Split and Combinations of Genotype and Infection
+```{r, First_Plots}
+
+#This Plots shows a female and male split. Each colour represents all the
+#   combination of genotype and infection a mice could have. 
+#   The lines represent average weights of each combination.  
+ggplot(data = Mice_Weight_Long, aes(x = Dates,
+                                   y = Weight,
+                                   color = interaction(GenoType, Infection))) +
+  geom_point() +
+  geom_smooth(mapping = aes(group = interaction(GenoType, Infection)), 
+              se = FALSE) +
+  facet_wrap( ~ Sex) + 
+  labs(color = "Combinations of 
+Genotype and Infection")
+
+
+ggplot(data = Mice_Weight_Long, aes(x = Dates,
+                                   y = Weight,
+                                   color = Sex)) +
+  geom_point() +
+  geom_smooth(mapping = aes(group = Sex), 
+              se = FALSE) +
+  facet_wrap( ~ interaction(GenoType, Infection)) + 
+  labs(y = "Weight (Grams)", 
+       color = "")
+
+```
+\newpage
+
+## Interactions Plots
+```{r}
+
+  #This filter our long format data to just male mice.
+Male_Long <- Mice_Weight_Long %>%
+  filter(Sex == "Male")
+
+#Interaction Plots
+#   This shows average weights on the y and dates on the x. 
+#   With splits in either infection or genotype.
+interaction.plot(Male_Long$Dates,
+                 Male_Long$Infection,
+                 Male_Long$Weight)
+
+interaction.plot(Male_Long$Dates,
+                 Male_Long$GenoType,
+                 Male_Long$Weight)
+
+```
+\newpage
+
+## Weights of Male Controls
+
+```{r}
+
+  #This filter our long format data to male control mice. 
+Male_Long_Ctrl <- Mice_Weight_Long %>%
+  filter(Sex == "Male") %>%
+  filter(Infection == "Ctrl")
+
+#This plot shows just male control. With the colour based on genotype and 
+#   the linetype for each individual subject.
+ggplot(data = Male_Long_Ctrl, aes(x = Dates, 
+                              y = Weight, 
+                              color = GenoType,
+                              linetype = Animal_Num)) +
+  geom_point() +
+  geom_line() + 
+  labs(color = "Genotype",
+       linetype = "Animal Number", 
+       title = "Weights of Control Animals")
+
+```
+\newpage
+
+## Boxplots of Day 1 Weight
+
+```{r}
+Mice_Day_1 <- Mice_Weight_Long %>%
+  filter(Dates == "2021-11-03")
+
+ggplot(data = Mice_Day_1, aes(x = interaction(Sex, GenoType, Infection),
+                              y = Weight,
+                              color = Sex)) + 
+  geom_boxplot() + 
+  labs(x = " ", 
+       y = "Weight", 
+       title = "Day 1 Weights") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+```
+\newpage
+
+## Minimum Weight of Infected Mice with Date
+
+```{r}
+#This groups each animal num and finds where they have the lowest weight. 
+# Then we remove all the days except the for the day where they are the lightest. 
+# We also remove the mice that werent infected. 
+
+Mice_Min <- Mice_Weight_Long %>%
+  group_by(Animal_Num) %>%
+  filter(Weight == min(Weight)) %>%
+  filter(Infection != "Ctrl")
+
+#This plot shows what days infected mice bottom out in weight and their weight. 
+# The colour is the combinations of Sex and Genotype.
+
+ggplot(data = Mice_Min, aes(x = Dates,
+                            y = Weight,
+                            fill = interaction(Sex, GenoType))) +
+  geom_bar(stat = "identity",
+           position = position_dodge2(preserve = "single")) + 
+  labs(x = "Dates", 
+       y  = "Minimum Weight", 
+       fill = "Combinations of 
+Sex and Genotype")
+
+```
+
+
+\newpage
+
+# 2-Way ANOVA of Weights on Day 1
+
+```{r}
+# Mice_Day_1 filters to just day 1 of the Mice_Weight
+
+# 2-Way ANOVA, Weight on GenoType and Infection
+two_way_aov <- aov(Weight ~ GenoType + Infection, data = Mice_Day_1)
+
+summary(two_way_aov)
+
+```
+
+\newpage
+
+# 2-Way ANOVA of Weights on Day 7
+
+```{r}
+#Filter to last day of study
+Mice_Day_7 <- Mice_Weight_Long %>%
+  filter(Dates == "2021-11-10")
+
+# 2-Way ANOVA, Weight on GenoType and Infection
+two_way_aov <- aov(Weight ~ GenoType + Infection, data = Mice_Day_7)
+
+summary(two_way_aov)
+
+```
+
+
+\newpage
+
+# Repeated Measure ANOVA
+
+  We did Repeated Measure ANOVA for both females and males. Since females didnt
+have any controls we only need to do a two-way repeated measures ANOVA. Because 
+we had only male controls we needed to do a three-way repeated measures ANOVA. 
+\newline
+
+## 2-Way Repeated Measures ANOVA
+```{r, Repeated_Measure_ANOVA}
+
+#2-Way Repeated Measures ANOVA
+    #This filter our long format data to just female mice.
+Female_Long <- Mice_Weight_Long %>%
+  filter(Sex == "Female")
+
+ezANOVA(data = Female_Long,
+        dv = Weight, 
+        wid = Animal_Num, 
+        within = Dates, 
+        between = GenoType, 
+        detailed = TRUE)
+
+
+```
+
+This 2-way repeated measure anova shows that only dates is significant.
+  This makes since logcially since the mices weights change day to day. 
+
+\newpage
+
+## 3-Way Repeated Measures ANOVA
+```{r}
+#3-Way Repeated Measures ANOVA
+    #This filter our long format data to just male mice.
+Male_Long <- Mice_Weight_Long %>%
+  filter(Sex == "Male")
+
+ezANOVA(data = Male_Long,
+        dv = Weight, 
+        wid = Animal_Num, 
+        within = Dates, 
+        between = c(GenoType, Infection), 
+        detailed = TRUE)
+
+```
+This 3-way repeated measure anova shows that dates and the interaction between
+  dates and infection are significant. For the same reason as before dates makes 
+  logical since. The interaction between dates and infection is understandable
+  as mice with SARS2 are going to loose more weight.
+  
+
+\newpage
+
+
+# Mixed Models
+
+  These are some of the mixed models we created for the project.
+
+More to come...
+\newline
+```{r, Mixed_Models}
+#Mixed Models
+
+  #Test Models
+test_model <- lmer(Weight ~ Dates + (1|Animal_Num), data = Mice_Weight_Long)
+test_model_1 <- lmer(Weight ~ Sex + GenoType + Infection + (1 | Dates) + (1 | Animal_Num), 
+                     data = Mice_Weight_Long)
+test_model_1.1 <- lmer(Weight ~ Sex + GenoType + Infection + (1 | Animal_Num), 
+                       data = Mice_Weight_Long)
+test_model_2 <- lmer(Weight ~ Sex + GenoType + Infection + (1 | Dates), 
+                     data = Mice_Weight_Long)
+test_model_3 <- lmer(Weight ~ 1 +Sex + GenoType + Infection + Dates + (1 + Dates | Animal_Num), 
+                     REML = T, 
+                     data = Mice_Weight_Long)
+
+anova(test_model_1, test_model_3, test = "Chisq", refit = T)
+summary(test_model_3)
+
+
+AIC(logLik(test_model_1))
+BIC(logLik(test_model_1))
+
+compare_performance(test_model,
+                    test_model_1,
+                    test_model_2,
+                    test_model_3)
+```
+We decide that either model_test_1 or test_model_3 are the best. I believe
+  model_1 has random intercept for both date and animal number. While model_3
+  has dates as a correlated random slope and animal number as a random intercept.
+
+\newpage
+
+
+# Dilution Data Cleaning
+
+  This is the second page of the spreadsheet.
+
+The data gets cleaned then our corrected for dilution row gets moved to the data
+set we have been work with.
+\newline
+```{r, Mice_Dilution}
+#This is the second data, Dilution info
+Mice_Dilution <- read.csv("Endsley Data 1.2.csv")
+
+#Removes First Row
+Mice_Dilution <- Mice_Dilution[-1,]
+
+#Shift Dilution columns up one
+shift <- function(x, n){
+  c(x[-(seq(n))], rep(NA, n))
+}
+Mice_Dilution$X.6 <- shift(Mice_Dilution$X.6, 1)
+
+#Avg Double Dillution and replace
+Mice_Dilution$X.6[13] <- mean(c(Mice_Dilution$X.6[13], Mice_Dilution$X.6[14]))
+
+#Move one value up that was missed placed
+Mice_Dilution$X.6[21] <- Mice_Dilution$X.6[22]
+
+#Remove extra rows
+Mice_Dilution <- Mice_Dilution %>%
+  filter(!(X.2 == ""))
+
+#Combine Dilution columns with OG Data Set
+Mice_Weight$Dilution <- Mice_Dilution$X.6
+
+#Change NA's to 0's
+Mice_Weight <- Mice_Weight %>%
+  mutate(Dilution = replace_na(Dilution, 0))
+```
+\newpage
+# Plots with New Dilution Data
+
+## Interaction of Dilution with Genotype, Infection,
+```{r, Dilution_plots}
+
+#Plot data with interaction with new Dilution
+  #This plot shows the max dilution for each sex for each combination of 
+  #genotype and infection. 
+ggplot(data = Mice_Weight, aes(x = interaction(GenoType, Infection), 
+                              y = Dilution,
+                              fill = Sex)) +
+  geom_bar(stat = "identity", 
+           position = position_dodge(width = 1)) +
+  scale_y_continuous(n.breaks = 10) + 
+  labs(x = "Combinations of Genotype and Infection") 
+  
+
+
+```
+
+\newpage
+
+
+
+## Barplot of PFU with Error Bars and Points
+
+```{r}
+
+
+#This makes a new column of average dilution based on group
+Mice_Weight <- Mice_Weight %>%
+  group_by(interaction(GenoType, Sex)) %>% 
+  mutate(Avg_Dil = mean(Dilution))
+
+  
+# This plots a average barplot, with every invidual subject plotted
+# with an error bar. 
+ggplot(data = Mice_Weight, aes(x = Sex, 
+                              y = Dilution)) +
+  facet_grid(~ GenoType) +
+  stat_summary(linewidth = 1, 
+               geom = "errorbar", 
+               colour = "BLACK", 
+               alpha = .2) +
+  geom_bar(mapping = aes(y = Avg_Dil, 
+                         fill = Sex), 
+           stat = "identity", 
+           position = position_dodge(width = 1)) +
+  geom_dotplot(binaxis='y', 
+               dotsize = .5, 
+               stackgroups = TRUE, 
+               binpositions = "bygroup", 
+               stackdir = "center") +
+  scale_y_continuous(n.breaks = 10) + 
+  labs(x = "",
+       y = "PFU") + 
+  scale_y_continuous(labels = scales::scientific)
+
+```
+
+\newpage
+
+
+
+## Barplot of log(PFU + 1) with Error Bars and Points
+
+```{r}
+
+
+#Redid graph from above to fix skewedness.
+# with log( + 1)
+Mice_WDIL <- Mice_Weight %>%
+  filter(Infection == "SARS2") %>%
+  group_by(interaction(GenoType, Sex)) %>% 
+  mutate(Avg_Dil = mean(log(Dilution + 1)))
+
+
+  
+
+ggplot(data = Mice_WDIL, aes(x = Sex, 
+                              y = log(Dilution + 1))) +
+  facet_grid(~ GenoType) +
+   stat_summary(linewidth = 1, 
+               geom = "errorbar", 
+               colour = "BLACK", 
+               alpha = .3) + 
+  geom_bar(mapping = aes(y = Avg_Dil,
+                         fill = Sex), 
+           stat = "identity", 
+           position = position_dodge(width = 1)) +
+  geom_dotplot(binaxis='y', 
+               dotsize = .5, 
+               stackgroups = TRUE, 
+               binpositions = "bygroup", 
+               stackdir = "center") +
+  labs(x = "",
+       y = "log(PFU + 1)")
+
+```
+
+
+
+\newpage
+
+## Corrected Dilution of Mice
+```{r}
+#This filters the dilutions not equal to zero. 
+Mice_Dilution <- Mice_Weight %>%
+  filter(!(Dilution == 0))
+
+#This plot shows the corrected dilution of mice with dilution. 
+ggplot(data = Mice_Dilution, aes(x = Animal_Num,
+                              y = Dilution,
+                              fill = Sex)) +
+  geom_bar(stat = "identity", 
+           position = position_dodge(width = 1)) +
+  labs(x = "Animal Number",
+       y = "PFU", 
+       fill = "")
+
+```
+\newpage
+
+# Wilcox Rank Sum Test
+```{r, Wilcox_Test}
+#Wilcox Rank Sum Test
+Mice_KO <- Mice_Weight %>%
+  filter(GenoType == "KO") %>%
+  filter(Infection == "SARS2")
+Mice_KFD <- Mice_KO %>%
+  filter(Sex == "Female")
+Mice_KMD <- Mice_KO %>%
+  filter(Sex == "Male")
+
+wilcox.test(Mice_KFD$Dilution, Mice_KMD$Dilution, paired = FALSE, alternative = "greater")
+
+
+
+Mice_WT <- Mice_Weight %>%
+  filter(GenoType == "WT") %>%
+  filter(Infection == "SARS2")
+
+wilcox.test(Mice_KO$Dilution, Mice_WT$Dilution, paired = FALSE, alternative = "greater")
+
+```
+
+
+The wilcox test was against male and female knock out mice that were infected 
+  with SARS2. We found that there wasn't a significant difference in the 
+  dilutions between the males and females. 
+
+\newpage
+
+# RNASeq Data 
+
+## KO Control vs WT Control Volcano Plot
+
+```{r}
+#Control KO vs WT
+
+Geno_Cntrl <- read.csv("KO_Ctrl.vs.WT_Ctrl.csv")
+
+#Filters to only protein coding genes
+# removes all NA pvals and NA adjusted pvals
+Geno_Cntrl <- Geno_Cntrl %>%
+  filter(biotype == "protein_coding") %>%
+  filter(!(
+    
+    
+    (pvalue))) %>%
+  filter(!(is.na(padj)))
+
+#Makes new col that says if gene is up or down regulated
+Geno_Cntrl$diffexpressed <- "NO"
+Geno_Cntrl$diffexpressed[Geno_Cntrl$log2FoldChange > 0.6 & Geno_Cntrl$pvalue < 0.05] <- "UP"
+Geno_Cntrl$diffexpressed[Geno_Cntrl$log2FoldChange < -0.6 & Geno_Cntrl$pvalue < 0.05] <- "DOWN"
+
+#Makes col of top 6 Genes to name on volcano plot
+Geno_Cntrl$delabel <- ifelse(Geno_Cntrl$name %in% head(Geno_Cntrl[order(Geno_Cntrl$padj), "name"], 6), Geno_Cntrl$name, NA)
+
+#Volcano Plot
+ggplot(data = Geno_Cntrl, aes(x = log2FoldChange, 
+                             y = -log10(pvalue),
+                             col = diffexpressed,
+                             label = delabel)) +
+  geom_point() + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') + 
+  geom_text_repel(max.overlaps = Inf) + 
+  scale_color_manual(values = c("grey", "#bb0c00", "#00AFBB"),
+                     labels = c("Not significant", "Upregulated", "Downregulated")) + 
+  labs(col = "",
+       title = "KO Control vs WT Control")
+
+
+#dput(Geno_Cntrl$name)
+```
+
+\newpage
+
+## KO Infected vs WT Infected Volcano Plot 
+
+```{r}
+#WT VS KO Infected
+Geno_Infc <- read.csv("KO_SARS2.vs.WT_SARS2.csv")
+
+#Filters to only protein coding genes
+# removes all NA pvals and NA adjusted pvals 
+Geno_Infc <- Geno_Infc %>%
+  filter(biotype == "protein_coding") %>%
+  filter(!(is.na(pvalue))) %>%
+  filter(!(is.na(padj)))
+
+
+#Makes new col that says if gene is up or down regulated
+Geno_Infc$diffexpressed <- "NO"
+Geno_Infc$diffexpressed[Geno_Infc$log2FoldChange > 0.6 & Geno_Infc$pvalue < 0.05] <- "UP"
+Geno_Infc$diffexpressed[Geno_Infc$log2FoldChange < -0.6 & Geno_Infc$pvalue < 0.05] <- "DOWN"
+
+#Makes col of top 16 Genes to name on volcano plot
+Geno_Infc$delabel <- ifelse(Geno_Infc$name %in% head(Geno_Infc[order(Geno_Infc$padj), "name"], 16), Geno_Infc$name, NA)
+
+
+#Volcano Plots
+ggplot(data = Geno_Infc, aes(x = log2FoldChange, 
+                             y = -log10(pvalue),
+                             col = diffexpressed,
+                             label = delabel)) +
+  geom_point() + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') + 
+  geom_text_repel(max.overlaps = Inf) + 
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+  labs(col = "",
+       title = "KO Infected vs WT Infected")
+
+
+
+
+dput((Geno_Infc %>%
+  filter(diffexpressed != "NO"))$name)
+
+
+```
+
+\newpage
+
+
+## WT Infected vs WT Control Volcano Plot
+
+```{r}
+Geno_Mix <- read.csv("WT_SARS2.vs.WT_Ctrl.csv")
+
+#Filters to only protein coding genes
+# removes all NA pvals and NA adjusted pvals 
+Geno_Mix <- Geno_Mix %>%
+  filter(biotype == "protein_coding") %>%
+  filter(!(is.na(pvalue))) %>%
+  filter(!(is.na(padj)))
+
+#Makes new col that says if gene is up or down regulated
+Geno_Mix$diffexpressed <- "NO"
+Geno_Mix$diffexpressed[Geno_Mix$log2FoldChange > 0.6 & Geno_Mix$pvalue < 0.05] <- "UP"
+Geno_Mix$diffexpressed[Geno_Mix$log2FoldChange < -0.6 & Geno_Mix$pvalue < 0.05] <- "DOWN"
+
+#Makes col of top upregulated/downregulated Genes to name on volcano plot
+Geno_Mix <- Geno_Mix %>%
+  mutate(diffexpressed2 = case_when(
+    log2FoldChange > 2 & -log10(pvalue) > 30 ~ "Upregulated",
+    log2FoldChange > 4 ~ "Upregulated",
+    (log2FoldChange < -2 | -log10(pvalue) > 15) & log2FoldChange < -.6 ~ "Downregulated",
+    TRUE ~ "Not of Interest"
+  )) %>%
+  mutate(labeled_genes = case_when(
+    diffexpressed2 == "Upregulated" ~ name,
+    diffexpressed2 == "Downregulated" ~ name,
+    TRUE ~ NA
+  ))
+  
+
+#Volcano Plot
+ggplot(data = Geno_Mix, aes(x = log2FoldChange, 
+                            y = -log10(pvalue),
+                            col = diffexpressed,
+                            label = labeled_genes)) +
+  geom_point() + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') + 
+  geom_text_repel(max.overlaps = Inf) + 
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+  labs(col = "",
+       title = "WT Infected vs WT Control")
+  
+```
+
+
+\newpage
+
+
+## RNASeq Data Cleaning
+
+```{r}
+
+RNASeq <- read.csv("Log2.normalized.read.counts.csv")
+
+
+#Filters Data to only protein coding genes
+# Pivot Longer
+RNASeq <- RNASeq %>%
+  filter(biotype == "protein_coding") %>%
+  pivot_longer(!c(ENSEMBL_id, biotype, name, gene_id), 
+               names_to = "Animal_Num",
+               values_to = "FoldChange")
+
+# Remove M before all animal numbers
+RNASeq$Animal_Num <- parse_number(RNASeq$Animal_Num)
+
+# Makes sure that my Animal Num in OG data is a numeric value
+Mice_Weight$Animal_Num <- as.numeric(levels(Mice_Weight$Animal_Num)[as.numeric(Mice_Weight$Animal_Num)])
+
+# Join Mice Weight and RNASeq by the animal numbers.
+# Has all col from both data sets
+RNASeq <- inner_join(RNASeq, Mice_Weight, by = "Animal_Num")
+
+RNASeq$Animal_Num <- as.factor(RNASeq$Animal_Num)
+
+
+```
+
+\newpage
+
+
+## Heatmap of KO Control vs WT Control
+```{r}
+
+#Filter RNASeq data to Ctrl
+# Then find which genes are up and down regulated in the 
+# KO Control vs WT Control Volcano Plot
+# pipe to ggplot and plot
+# Facet grid to genotype and remove the empty columns
+
+
+
+
+RNASeq %>%
+  filter(name %in% dput((Geno_Cntrl %>% 
+                           filter(diffexpressed != "NO"))$name)) %>%
+  filter(Infection == "Ctrl") %>%
+  ggplot(aes(x = Animal_Num, 
+             y = name,
+             fill = FoldChange)) + 
+    geom_tile() + 
+  facet_grid(~ GenoType, scales = "free", space = "free") + 
+  scale_fill_distiller(palette = "OrRd",
+                       direction = 1) + 
+  labs(title = "KO Control vs WT Control",
+       x= "",
+       y = "",
+       fill = "FoldChange")
+
+# NOTE: dput function outputs a written concatenate
+#         so you dont have to write it yourself. 
+# NOTE: If your Fold Change crosses zero you can use
+#         palette = "RdBu",
+#                      limits = c(-1,1)*max(abs(RNASeq$FoldChange))
+#         in the scale_fill_distiller
+
+```
+
+\newpage
+
+## Heatmap of KO Infected vs WT Infected
+
+```{r}
+#Filter RNASeq data to SARS2
+# Then find which genes are up and down regulated in the 
+# KO Infected vs WT Infected Volcano Plot
+# pipe to ggplot and plot
+# Facet grid to genotype and remove the empty columns
+  
+RNASeq %>%
+  filter(Infection == "SARS2") %>%
+  filter(name %in% dput((Geno_Infc %>%
+                           filter(diffexpressed != "NO"))$name)) %>%
+  ggplot(aes(x = Animal_Num, 
+             y = name,
+             fill = FoldChange)) + 
+    geom_tile() + 
+  facet_grid(~interaction(GenoType, Sex), scales = "free", space = "free") + 
+  scale_fill_distiller(palette = "OrRd",
+                       direction = 1, 
+                       limits = c(0, 15)) + 
+  labs(title = "KO Infected vs WT Infected",
+       x= "",
+       y = "",
+       fill = "FoldChange") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+
+RNASeq$Dil_Label <- ifelse(RNASeq$Dilution > 0, "Y", "N")
+
+
+```
+\newpage
+
+## Reduced Heatmap of KO Infected vs WT Infected
+```{r}
+
+#Filter RNASeq data to SARS2
+# Then find which genes are up and down regulated in the 
+# KO Infected vs WT Control Volcano Plot
+# Take the baseMean < 100 and baseMean > 20 to plot 
+# pipe to ggplot and plot
+# Facet grid to genotype and remove the empty columns
+
+RNASeq %>%
+  filter(Infection == "SARS2") %>%
+  filter(name %in% dput((Geno_Infc %>%
+                           filter(diffexpressed != "NO") %>%
+                           filter(baseMean < 100,
+                                  baseMean  > 20))$name)) %>%
+  ggplot(aes(x = Animal_Num, 
+             y = name,
+             fill = FoldChange)) + 
+    geom_tile() + 
+  facet_grid(~interaction(GenoType, Sex), scales = "free", space = "free") + 
+  scale_fill_distiller(palette = "OrRd",
+                       direction = 1, 
+                       limits = c(4, 7)) + 
+  labs(title = "KO Infected vs WT Infected",
+       x= "",
+       y = "",
+       fill = "FoldChange") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+
+
+\newpage 
+
+## Heatmap of WT Infected vs WT Control
+
+```{r, results='hide'}
+#Filter RNASeq data to SARS2
+# Then find which genes are up and down regulated in the 
+# WT Infected vs WT Control Volcano Plot
+# Take the first 10 up regulated and bottom 10 down regulated, try using 
+# pipe to ggplot and plot
+# Facet grid to genotype and remove the empty columns
+
+RNASeq %>%
+  filter(GenoType == "WT") %>%
+  filter(name %in% dput((Geno_Mix %>%
+  filter(!is.na(labeled_genes)) %>%
+    arrange(log2FoldChange))$labeled_genes[c(1:10, 18:27)])) %>%
+  ggplot(aes(x = Animal_Num, 
+             y = name,
+             fill = FoldChange)) + 
+    geom_tile() + 
+  facet_grid(~interaction(Infection, Sex), scales = "free", space = "free") + 
+  scale_fill_distiller(palette = "OrRd",
+                       direction = 1, 
+                       limits = c(0, 20)) + 
+  labs(title = "WT Infected vs WT Control",
+       x= "",
+       y = "",
+       fill = "FoldChange") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+```
+\newpage
+
+```{r}
+# Dilution label to see which Subjects have Dilution
+RNASeq$Dil_Label <- ifelse(RNASeq$Dilution > 0, "Dilution", "None")
+
+#Filter RNASeq data to SARS2
+# Then find which genes are up and down regulated in the 
+# WT Infected vs WT Control Volcano Plot
+# Take the first 5 up regulated and bottom 5 down regulated, try using 
+# pipe to ggplot and plot
+# Facet grid to genotype and remove the empty columns
+
+RNASeq %>%
+  filter(GenoType == "KO") %>%
+  filter(Infection == "SARS2") %>%
+  filter(name %in% dput((Geno_Mix %>%
+  filter(!is.na(labeled_genes)) %>%
+    arrange(log2FoldChange))$labeled_genes[c(1:5, 22:27)])) %>%
+  ggplot(aes(x = Animal_Num, 
+             y = name,
+             fill = FoldChange)) + 
+    geom_tile() + 
+  facet_grid(~interaction(Dil_Label, Sex), scales = "free", space = "free") + 
+  scale_fill_distiller(palette = "OrRd",
+                       direction = 1, 
+                       limits = c(0, 20)) + 
+  labs(title = "WT Infected vs WT Control",
+       x= "",
+       y = "",
+       fill = "FoldChange") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+
+\newpage
+
+## Heatmap of Nlrp1b Infected vs WT Infected
+```{r}
+#RNASeq filtered to just SARS2 and Nlrp1b
+# piped into ggplot, tile plot
+# color change by fold change and labeled by animal num
+# facet grid based on genotype and sex
+# labels rotated for readability
+
+RNASeq %>%
+  filter(Infection == "SARS2") %>%
+  filter(name %in% dput((Geno_Infc %>%
+                           filter(name == c("Nlrp1b")))$name)) %>%
+  ggplot(aes(x = Animal_Num, 
+             y = name,
+             fill = FoldChange)) + 
+    geom_tile() + 
+  facet_grid(~interaction(GenoType, Sex), 
+             scales = "free", 
+             space = "free") + 
+  scale_fill_distiller(palette = "OrRd",
+                       direction = 1) + 
+  labs(title = "KO Infected vs WT Infected",
+       x= "",
+       y = "",
+       fill = "FoldChange") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+
+## Heatmap of Mfap4 KO Infected vs WT Infected 
+```{r}
+
+#RNASeq filtered to just SARS2 and Mfap4
+# piped into ggplot, tile plot
+# color change by fold change and labeled by animal num
+# facet grid based on genotype and sex
+# labels rotated for readability
+RNASeq %>%
+  filter(Infection == "SARS2") %>%
+  filter(name %in% dput((Geno_Infc %>%
+                           filter(name == c("Mfap4")))$name)) %>%
+  ggplot(aes(x = Animal_Num, 
+             y = name,
+             fill = FoldChange)) + 
+    geom_tile() + 
+  facet_grid(~interaction(GenoType, Sex), scales = "free", space = "free") + 
+  scale_fill_distiller(palette = "OrRd",
+                       direction = 1) + 
+  labs(title = "KO Infected vs WT Infected",
+       x= "",
+       y = "",
+       fill = "FoldChange") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+
+```
+
+\newpage
+
+
+## Heatmap of Xaf1 Infected vs WT Infected
+```{r}
+#RNASeq filtered to just SARS2 and Xaf1
+# piped into ggplot, tile plot
+# color change by fold change and labeled by animal num
+# facet grid based on genotype and sex
+# labels rotated for readability
+
+RNASeq %>%
+  filter(Infection == "SARS2") %>%
+  filter(name %in% dput((Geno_Infc %>%
+                           filter(name == c("Xaf1")))$name)) %>%
+  ggplot(aes(x = Animal_Num, 
+             y = name,
+             fill = FoldChange)) + 
+    geom_tile() + 
+  facet_grid(~interaction(GenoType, Sex), 
+             scales = "free", 
+             space = "free") + 
+  scale_fill_distiller(palette = "OrRd",
+                       direction = 1) + 
+  labs(title = "Xaf1 KO Infected vs Xaf1 WT Infected",
+       x= "Animal Number",
+       y = "",
+       fill = "FoldChange") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+\newpage
+
+# Dilution Correlation Test
+NOTE: One issues on the following correlation tests is that our data is small. 
+So it will be difficult to find any associations. 
+
+## Correlation Of KO Dilution Female vs Xaf1 Fold Change
+
+```{r}
+
+#Filters RNASeq data to KO Females with Xaf1 gene
+Dil_XAF1 <- RNASeq %>%
+  filter(GenoType == "KO") %>%
+  filter(Sex == "Female") %>%
+  filter(name == "Xaf1")
+
+#Runs Correlation test on Xaf1 fold change and KO Females Dilutions
+cor.test(Dil_XAF1$FoldChange, Dil_XAF1$Dilution)
+
+```
+ 
+H0: r = 0
+
+H1: r != 0
+
+The p-val is equal to .322 with a significant level of .05. We fail to reject
+the null, thus we dont have significant evidence to suggest that there is
+association between KO dilution female and Xaf1 fold change.
+
+\newpage
+
+## Correlation Of KO Dilution Male vs Xaf1 Fold Change
+
+```{r}
+
+#Filters RNASeq Data to KO Males with Xaf1 Gene
+Dil_XAF1 <- RNASeq %>%
+  filter(GenoType == "KO") %>%
+  filter(Sex == "Male") %>%
+  filter(name == "Xaf1")
+
+#Runs Correlation test on Xaf1 fold change and KO Males Dilutions
+cor.test(Dil_XAF1$FoldChange, Dil_XAF1$Dilution)
+
+```
+ 
+H0: r = 0
+
+H1: r != 0
+
+The p-val is equal to .2589 with a significant level of .05. We fail to reject
+the null, thus we dont have significant evidence to suggest that there is
+association between KO dilution male and Xaf1 fold change.
+
+\newpage
+
+## Correlation Of KO Dilution vs Xaf1 Fold Change
+
+```{r}
+
+#Filters KO Mice with Xaf1 genes
+Dil_XAF1 <- RNASeq %>%
+  filter(GenoType == "KO") %>%
+  filter(name == "Xaf1")
+
+#Runs Correlation test on Xaf1 fold change and KO Mice Dilutions
+cor.test(Dil_XAF1$FoldChange, Dil_XAF1$Dilution)
+
+```
+ 
+H0: r = 0
+
+H1: r != 0
+
+The p-val is equal to .2763 with a significant level of .05. We fail to reject
+the null, thus we dont have significant evidence to suggest that there is
+association between KO dilution and Xaf1 fold change.
+
+
+
+
+\newpage
+
+
+# T-Test for Xaf1 Fold Change
+
+## T-Test for Xaf1, KO vs WT
+
+```{r}
+# Filter RNASeq to both WT and Xaf1
+WT_XAF1 <- RNASeq %>%
+  filter(GenoType == "WT") %>%
+  filter(name == "Xaf1")
+
+# Filter RNASeq to both KO and Xaf1
+KO_XAF1 <- RNASeq %>%
+  filter(GenoType == "KO") %>%
+  filter(name == "Xaf1")
+
+# T test with a greater than alternative 
+t.test(KO_XAF1$FoldChange, WT_XAF1$FoldChange, alternative = "greater")
+
+
+```
+H0: Mean of KO Xaf1 fold change is less or equal than WT Xaf1 fold change
+
+H1: Mean of KO Xaf1 fold change is greater than WT Xaf1 fold change
+
+The p-val is 1.64e-11 with significant level of .05. 
+We reject the null, meaning we have sufficient evidence to suggest that 
+the mean of KO Xaf1 fold change is greater than WT Xaf1 fold change
+
+\newpage
+
+## T-Test for Xaf1 KO, Females vs Males
+
+```{r}
+# Filter RNASeq to KO Male and Xaf1
+KO_XAF1_M <- RNASeq %>%
+  filter(GenoType == "KO") %>%
+  filter(Sex == "Male") %>%
+  filter(name == "Xaf1")
+
+# Filter RNASeq to KO Female and Xaf1
+KO_XAF1_F <- RNASeq %>%
+  filter(GenoType == "KO") %>%
+  filter(Sex == "Female") %>%
+  filter(name == "Xaf1")
+
+# T test with a greater than alternative 
+t.test(KO_XAF1_F$FoldChange, KO_XAF1_M$FoldChange, alternative = "greater")
+
+
+```
+H0: Mean of KO Females Xaf1 fold change is less than or equal to mean of KO
+Male Xaf1 fold change.
+
+H1: Mean of KO Females Xaf1 fold change is greater than the mean of KO
+Male Xaf1 fold change. 
+
+The p-val is .3779 with a significant level of .05. We fail to reject the
+null, meaning do not have sufficient evidence to suggest that the mean of KO Females 
+Xaf1 fold change is greater than the mean of KO Male Xaf1 fold change.
+
+\newpage 
+
+## T-Test for Xaf1 WT, Females vs Males
+
+```{r}
+
+# Filter RNASeq to KO Male and Xaf1
+WT_XAF1_M <- RNASeq %>%
+  filter(GenoType == "WT") %>%
+  filter(Sex == "Male") %>%
+  filter(name == "Xaf1")
+
+# Filter RNASeq to KO Female and Xaf1
+WT_XAF1_F <- RNASeq %>%
+  filter(GenoType == "WT") %>%
+  filter(Sex == "Female") %>%
+  filter(name == "Xaf1")
+
+# T test with a greater than alternative 
+t.test(WT_XAF1_F$FoldChange, WT_XAF1_M$FoldChange, alternative = "greater")
+
+
+```
+
+H0: Mean of WT Females Xaf1 fold change is less than or equal to mean of WT
+Male Xaf1 fold change.
+
+H1: Mean of WT Females Xaf1 fold change is greater than the mean of WT
+Male Xaf1 fold change. 
+
+The p-val is .6185 with a significant level of .05. We fail to reject the
+null, meaning do not have sufficient evidence to suggest that the mean of WT Females 
+Xaf1 fold change is greater than the mean of WT Male Xaf1 fold change.
+
+
+\newpage
+
+
+# 2-Way ANOVA of Xaf1 Fold Change
+
+```{r}
+# Filter RNASeq to just Xaf1
+XAF1 <- RNASeq %>%
+  filter(name == "Xaf1")
+
+# 2-Way Anova, testing FoldChange on GenoType and Sex
+two_way_aov <- aov(FoldChange ~ GenoType + Sex, data = XAF1)
+
+summary(two_way_aov)
+
+```
+Because GenoType p-vals is 4.73e-11 we can conclude that a change in genotype
+will impact significantly the mean of Xaf1 fold change. 
+
+\newpage
+
+.
+
+\newpage
+
+Hi Jackson cool code you got here. Would be a shame if someone were to delete it all. Good thing I'd never do that to you. :)
+
+I like your plots they look cool.
+I'm jealous because I want to do a heat map but our stuff is insanely simple.
+I wish I knew what you were doing to my code cause I'm not actually doing anything.
+Also I don't know how to use the % stuff so I will not be using it at all. I appreciate the effort though.
+Okay you can have your stuff back :)
+
+Hello again Jackson. It's your favorite code writer here to say I'm better at coding than you are. You have to agree. I agree.
+
+I know I said you're a hater but I just don't know to scroll down so it's okay you're not a hater. You're just smarter than me and I'm JEALOUS.
+
+I hope you weren't doing anything too important because now I'm taking up your time on purpose. I'm the best coder alive by the way. Make sure you tell people that when we leave the program.
+Hi Jackson.
+
+Okay hello again Jackson. How are you? I hope you're doing good it would kinda suck if you weren't. Just wanted to fix your code because it's horrendous. No need to worry though, I got it covered. Also you're pretty cool. Also you're secretly a British man. That's all for now. Bye. :)
+
+Hello again Jackson. Hope you didn't miss me too much. Your code sure is coding. I wish my project was cooler like yours is. I'm just doing very basic introductory statistics things and you're doing cool stuff. I'm still a better coder than you are though. You're an effective coder but I'm a cool coder. Don't be too jealous though. I'll teach you how to code if you'd like. Okay bye. :)
+
+Thanks for helping me with my code I really appreciate it. I don't know what I'd do if you didn't help me out. Probably go ask Dr. Villasante but that's not the point. 
