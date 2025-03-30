@@ -16,6 +16,7 @@ Dont struggle with problems use AI
 	- [x] CHW
 - Due Friday
 - [ ] Copy Def.s
+- [ ] Fortnite griddy on the haters
 
 
 ## Extra Work
